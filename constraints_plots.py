@@ -23,7 +23,7 @@ os.system('cls' if os.name == 'nt' else 'clear')
 os.makedirs('plots', exist_ok=True)
 
 # Import parameters from simulation module to avoid duplication
-from CBF.simulation import RobotSimulation, rho_0, rho_1, theta_0, V_M, A_M, map_size, alpha_C
+from simulation import RobotSimulation, rho_0, rho_1, theta_0, V_M, A_M, map_size, alpha_C
 # Create simulation instance and use its parameters
 sim = RobotSimulation()
 

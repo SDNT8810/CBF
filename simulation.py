@@ -9,6 +9,7 @@ Robot Constraints Simulation with Animation
 import numpy as np
 import matplotlib
 matplotlib.use('TkAgg')
+# matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from matplotlib.animation import FuncAnimation
