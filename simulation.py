@@ -412,6 +412,286 @@ class RobotSimulation:
         
         return self.animation
 
+    def calculate_constraint_derivatives(self, robot_pos, robot_vel, robot_acc, human_vel=None, human_acc=None):
+        """
+        Calculate time derivatives of all 4 constraint functions for multiple humans
+        Based on formulations from README.md
+        
+        Args:
+            robot_pos: Robot position [x_r, y_r]
+            robot_vel: Robot velocity [vx_r, vy_r]
+            robot_acc: Robot acceleration [ax_r, ay_r]
+            human_vel: Human velocities (optional, defaults to zero)
+            human_acc: Human accelerations (optional, defaults to zero)
+        
+        Returns:
+            h_d_dot, h_y_dot, h_s_dot, h_a_dot: Time derivatives of constraint functions
+        """
+        v_magnitude = np.linalg.norm(robot_vel)
+        a_magnitude = np.linalg.norm(robot_acc)
+        
+        # Initialize lists to store derivatives for each human
+        h_d_dot_list = []
+        h_y_dot_list = []
+        h_s_dot_list = []
+        h_a_dot_list = []
+        
+        # Default human velocities and accelerations to zero if not provided
+        if human_vel is None:
+            human_vel = [np.array([0.0, 0.0]) for _ in self.human_pos]
+        if human_acc is None:
+            human_acc = [np.array([0.0, 0.0]) for _ in self.human_pos]
+        
+        # Calculate derivatives for each human
+        for i, human_pos in enumerate(self.human_pos):
+            # Distance to human (ρ_hi)
+            robot_rho = np.linalg.norm(robot_pos - human_pos)
+            
+            # Avoid division by zero
+            if robot_rho < 1e-6:
+                robot_rho = 1e-6
+            
+            # Relative position and velocity
+            rel_pos = robot_pos - human_pos  # p_r - p_hi
+            rel_vel = robot_vel - human_vel[i]  # v_r - v_hi
+            rel_acc = robot_acc - human_acc[i]  # a_r - a_hi
+            
+            # === h1: Distance Constraint Derivative (Equation 7) ===
+            # ḣ_d,i = dρ_hi/dt = (p_r - p_hi)^T (v_r - v_hi) / ρ_hi
+            h_d_dot = np.dot(rel_pos, rel_vel) / robot_rho
+            h_d_dot_list.append(h_d_dot)
+            
+            # === h2: Yielding Constraint Derivative (Equation 8) ===
+            # ḣ_y,i = d²ρ_hi/dt² = (1/ρ_hi) * [||v_r - v_hi||² + (p_r - p_hi)^T (a_r - a_hi) 
+            #                                   - [(p_r - p_hi)^T (v_r - v_hi)]²/ρ_hi²]
+            rel_vel_squared = np.dot(rel_vel, rel_vel)
+            pos_acc_term = np.dot(rel_pos, rel_acc)
+            pos_vel_dot = np.dot(rel_pos, rel_vel)
+            
+            h_y_dot = (1.0 / robot_rho) * (
+                rel_vel_squared + pos_acc_term - (pos_vel_dot ** 2) / (robot_rho ** 2)
+            )
+            
+            # Apply yielding constraint derivative only in critical regions
+            robot_heading = np.arctan2(robot_vel[1], robot_vel[0]) if v_magnitude > 0.001 else 0
+            human_direction = np.arctan2(human_pos[1] - robot_pos[1], 
+                                       human_pos[0] - robot_pos[0])
+            relative_angle = human_direction - robot_heading
+            relative_angle = np.arctan2(np.sin(relative_angle), np.cos(relative_angle))
+            is_front_region = np.abs(relative_angle) < theta_0
+            
+            front_critical = (robot_rho <= rho_0) and is_front_region
+            side_critical = (robot_rho <= rho_1) and not is_front_region
+            
+            if front_critical or side_critical:
+                h_y_dot_list.append(h_y_dot)
+            
+            # === h3: Speed Constraint Derivative (Equation 9) ===
+            # ḣ_s,i = V_M * sech²(ρ_hi) * (p_r - p_hi)^T (v_r - v_hi) / ρ_hi - v_r^T a_r / ||v_r||
+            sech_squared = 1.0 / (np.cosh(robot_rho) ** 2)  # sech²(ρ_hi)
+            first_term = V_M * sech_squared * np.dot(rel_pos, rel_vel) / robot_rho
+            
+            if v_magnitude > 1e-6:
+                second_term = np.dot(robot_vel, robot_acc) / v_magnitude
+            else:
+                second_term = 0.0
+            
+            h_s_dot = first_term - second_term
+            h_s_dot_list.append(h_s_dot)
+            
+            # === h4: Acceleration Constraint Derivative (Equation 10) ===
+            # ḣ_a,i = A_M * sech²(ρ_hi) * (p_r - p_hi)^T (v_r - v_hi) / ρ_hi - a_r^T ȧ_r / ||a_r||
+            first_term_acc = A_M * sech_squared * np.dot(rel_pos, rel_vel) / robot_rho
+            
+            # For the second term, we need the jerk (ȧ_r). 
+            # In practice, this would be computed from the control input derivative.
+            # For now, we'll assume jerk is zero (constant acceleration scenario)
+            if a_magnitude > 1e-6:
+                # Assuming jerk = 0 for simplicity
+                jerk = np.array([0.0, 0.0])
+                second_term_acc = np.dot(robot_acc, jerk) / a_magnitude
+            else:
+                second_term_acc = 0.0
+            
+            h_a_dot = first_term_acc - second_term_acc
+            h_a_dot_list.append(h_a_dot)
+        
+        # Take minimum constraint derivative value across all humans for each type
+        h_d_dot = float(min(h_d_dot_list))
+        h_y_dot = float(min(h_y_dot_list)) if h_y_dot_list else None
+        h_s_dot = float(min(h_s_dot_list))
+        h_a_dot = float(min(h_a_dot_list))
+        
+        return h_d_dot, h_y_dot, h_s_dot, h_a_dot
+
+    def calculate_spatial_derivatives(self, robot_pos, robot_vel):
+        """
+        Calculate spatial derivatives (gradients) of all 4 constraint functions
+        Based on formulations from README.md
+        
+        Args:
+            robot_pos: Robot position [x_r, y_r]
+            robot_vel: Robot velocity [vx_r, vy_r]
+        
+        Returns:
+            Dictionary containing spatial derivatives for each constraint
+        """
+        v_magnitude = np.linalg.norm(robot_vel)
+        
+        # Initialize dictionaries to store gradients for each human
+        gradients = {
+            'h_d': {'x': [], 'y': [], 'theta': []},
+            'h_y': {'x': [], 'y': [], 'theta': []},
+            'h_s': {'x': [], 'y': [], 'theta': []},
+            'h_a': {'x': [], 'y': [], 'theta': []}
+        }
+        
+        # Calculate gradients for each human
+        for i, human_pos in enumerate(self.human_pos):
+            # Distance to human (ρ_hi)
+            robot_rho = np.linalg.norm(robot_pos - human_pos)
+            
+            # Avoid division by zero
+            if robot_rho < 1e-6:
+                robot_rho = 1e-6
+            
+            # Relative position
+            rel_pos = robot_pos - human_pos  # p_r - p_hi
+            
+            # === Distance Constraint Gradients ===
+            # ∂h_d,i/∂x_r = (x_r - x_hi) / ρ_hi
+            # ∂h_d,i/∂y_r = (y_r - y_hi) / ρ_hi
+            # ∂h_d,i/∂θ_r = 0
+            gradients['h_d']['x'].append(rel_pos[0] / robot_rho)
+            gradients['h_d']['y'].append(rel_pos[1] / robot_rho)
+            gradients['h_d']['theta'].append(0.0)
+            
+            # === Yielding Constraint Gradients ===
+            # Same as distance constraint for spatial derivatives
+            gradients['h_y']['x'].append(rel_pos[0] / robot_rho)
+            gradients['h_y']['y'].append(rel_pos[1] / robot_rho)
+            gradients['h_y']['theta'].append(0.0)
+            
+            # === Speed Constraint Gradients ===
+            # ∂h_s,i/∂x_r = V_M * sech²(ρ_hi) * (x_r - x_hi) / ρ_hi
+            # ∂h_s,i/∂y_r = V_M * sech²(ρ_hi) * (y_r - y_hi) / ρ_hi
+            # ∂h_s,i/∂θ_r = 0
+            sech_squared = 1.0 / (np.cosh(robot_rho) ** 2)
+            gradients['h_s']['x'].append(V_M * sech_squared * rel_pos[0] / robot_rho)
+            gradients['h_s']['y'].append(V_M * sech_squared * rel_pos[1] / robot_rho)
+            gradients['h_s']['theta'].append(0.0)
+            
+            # === Acceleration Constraint Gradients ===
+            # ∂h_a,i/∂x_r = A_M * sech²(ρ_hi) * (x_r - x_hi) / ρ_hi
+            # ∂h_a,i/∂y_r = A_M * sech²(ρ_hi) * (y_r - y_hi) / ρ_hi
+            # ∂h_a,i/∂θ_r = 0
+            gradients['h_a']['x'].append(A_M * sech_squared * rel_pos[0] / robot_rho)
+            gradients['h_a']['y'].append(A_M * sech_squared * rel_pos[1] / robot_rho)
+            gradients['h_a']['theta'].append(0.0)
+        
+        # Take minimum gradient values across all humans for each constraint type
+        min_gradients = {}
+        for constraint in ['h_d', 'h_y', 'h_s', 'h_a']:
+            min_gradients[constraint] = {
+                'x': float(min(gradients[constraint]['x'])),
+                'y': float(min(gradients[constraint]['y'])),
+                'theta': float(min(gradients[constraint]['theta']))
+            }
+        
+        return min_gradients
+    
+    def demonstrate_derivatives(self, t=1.0):
+        """
+        Demonstrate the usage of constraint derivative functions
+        
+        Args:
+            t: Time at which to evaluate derivatives
+        """
+        print("\n" + "="*60)
+        print("CONSTRAINT DERIVATIVES DEMONSTRATION")
+        print("="*60)
+        
+        # Get robot state at specified time
+        robot_pos, robot_vel = self.get_robot_state_at_time(t)
+        
+        # For demonstration, assume robot has some acceleration
+        # In practice, this would come from the control input
+        robot_acc = np.array([0.1, 0.05])  # Example acceleration
+        
+        print(f"Time: {t:.2f} s")
+        print(f"Robot position: ({robot_pos[0]:.3f}, {robot_pos[1]:.3f}) m")
+        print(f"Robot velocity: ({robot_vel[0]:.3f}, {robot_vel[1]:.3f}) m/s")
+        print(f"Robot acceleration: ({robot_acc[0]:.3f}, {robot_acc[1]:.3f}) m/s²")
+        print(f"Speed magnitude: {np.linalg.norm(robot_vel):.3f} m/s")
+        
+        # Calculate current constraint values
+        h_d, h_y, h_s, h_a, h_min, min_distance = self.calculate_constraints(robot_pos, robot_vel)
+        
+        print(f"\nCurrent Constraint Values:")
+        print(f"  h_d (Distance):     {h_d:.4f}")
+        print(f"  h_y (Yielding):     {h_y:.4f}")
+        print(f"  h_s (Speed):        {h_s:.4f}")
+        print(f"  h_a (Acceleration): {h_a:.4f}")
+        print(f"  h_min (Minimum):    {h_min:.4f}")
+        print(f"  Min distance:       {min_distance:.4f} m")
+        
+        # Calculate time derivatives
+        h_d_dot, h_y_dot, h_s_dot, h_a_dot = self.calculate_constraint_derivatives(
+            robot_pos, robot_vel, robot_acc
+        )
+        
+        print(f"\nTime Derivatives (ḣ):")
+        print(f"  ḣ_d (Distance rate):     {h_d_dot:.4f}")
+        if h_y_dot is not None:
+            print(f"  ḣ_y (Yielding rate):     {h_y_dot:.4f}")
+        else:
+            print(f"  ḣ_y (Yielding rate):     N/A (not in critical region)")
+        print(f"  ḣ_s (Speed rate):        {h_s_dot:.4f}")
+        print(f"  ḣ_a (Acceleration rate): {h_a_dot:.4f}")
+        
+        # Calculate spatial derivatives
+        gradients = self.calculate_spatial_derivatives(robot_pos, robot_vel)
+        
+        print(f"\nSpatial Derivatives (∇h):")
+        for constraint in ['h_d', 'h_y', 'h_s', 'h_a']:
+            grad = gradients[constraint]
+            constraint_names = {
+                'h_d': 'Distance',
+                'h_y': 'Yielding', 
+                'h_s': 'Speed',
+                'h_a': 'Acceleration'
+            }
+            print(f"  ∇{constraint} ({constraint_names[constraint]}):")
+            print(f"    ∂/∂x: {grad['x']:.4f}")
+            print(f"    ∂/∂y: {grad['y']:.4f}")
+            print(f"    ∂/∂θ: {grad['theta']:.4f}")
+        
+        # Evaluate CBF conditions using derivatives
+        print(f"\nControl Barrier Function Conditions:")
+        print(f"Using α = {alpha_C}")
+        
+        # CBF condition: ḣ + α·h ≥ 0
+        cbf_conditions = {}
+        constraints_data = [
+            ('h_d', h_d, h_d_dot),
+            ('h_s', h_s, h_s_dot),
+            ('h_a', h_a, h_a_dot)
+        ]
+        
+        if h_y_dot is not None:
+            constraints_data.append(('h_y', h_y, h_y_dot))
+        
+        for name, h_val, h_dot_val in constraints_data:
+            cbf_val = h_dot_val + alpha_C * h_val
+            cbf_conditions[name] = cbf_val
+            status = "✅ SATISFIED" if cbf_val >= 0 else "❌ VIOLATED"
+            print(f"  {name}: ḣ + α·h = {h_dot_val:.4f} + {alpha_C}×{h_val:.4f} = {cbf_val:.4f} {status}")
+        
+        all_satisfied = all(val >= 0 for val in cbf_conditions.values())
+        print(f"\nOverall CBF Status: {'✅ ALL SATISFIED' if all_satisfied else '❌ SOME VIOLATED'}")
+        
+        print("="*60)
+        
 def main():
     """Main function"""
     print("="*60)
@@ -421,6 +701,13 @@ def main():
     # Create and run simulation
     sim = RobotSimulation()
     sim.generate_random_trajectory()
+    
+    # Demonstrate derivative functions before animation
+    print("\nDemonstrating constraint derivative functions...")
+    sim.demonstrate_derivatives(t=0.5)  # Demonstrate at t=0.5 seconds
+    sim.demonstrate_derivatives(t=1.0)  # Demonstrate at t=1.0 seconds
+    
+    print("\nStarting animation...")
     sim.setup_animation()
     anim = sim.run_animation(animation_duration)  # Hold reference to prevent garbage collection
     
