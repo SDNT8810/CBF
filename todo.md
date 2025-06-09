@@ -39,5 +39,10 @@ SIDE REGION (|θ_hi| ≥ θ_0):
     proposed   :     is_front_region = np.abs(np.sin(relative_angle)) < np.abs(np.sin(theta_0))
 ```
 
-[7]- check if h1 and h3 is covering h2
-[8]- Implementation of new constraint functions
+
+# phase 3: new constraints
+
+[1]- Check if h1 and h2 is covering h3
+[2]- Implementation of derivative functions for h1, h2, h3, h4
+[3]- Implementation of new constraint functions
+

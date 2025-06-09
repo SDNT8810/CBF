@@ -2,88 +2,10 @@
 Implementation based on the Bi-Level Performance-Safety Consideration paper.
 Constraints are defined according to equations (7), (8), (9), (10).
 
-## Current Implementation Status
-
-### Completed Features ✅
-- Distance Constraint (Equation 7) with improved angular region detection
-- Yielding Constraint (Equation 8) for approach rate control  
-- Speed Constraint (Equation 9) with distance-dependent limits
-- Acceleration Constraint (Equation 10) - under review
-- Multiple human support
-- Real-time simulation with animation
-- Constraint visualization plots
-
 ### Recent Improvements
 - Modified front/side region detection using sine-based angular comparison
 - Enhanced boundary condition handling (h = 0 on safety boundaries)
 - Support for multiple human obstacles
-
-## Constraint Functions
-Implementation Summary:
-
-1. DistanceConstraint - Equation (7): Maintains safe distance with different thresholds
-   for front (ρ_0=3.0m) and side (ρ_1=1.0m) regions
-
-2. YieldingConstraint - Equation (8): Enforces yielding behavior when approaching humans
-   Returns approach rate (dρ/dt) in yielding zones
-
-3. SpeedConstraint - Equation (9): Limits speed based on distance to humans
-   Uses ν_M(ρ_hi) = V_M · tanh(ρ_hi) for speed limits
-
-4. AccelConstraint - Equation (10): Constrains acceleration near humans
-   Uses distance-dependent acceleration limits
-
-All Constraints implement the condition: C_ji = ḣ_ji + α·h²_ji ≥ 0 (Equation 11)
-
-### Equation (7) - Distance Constraint
-```
-h_d,i(ρ_hi, θ_hi) = {
-    ρ_hi - ρ_0,  if |θ_hi| < θ_0 (front region)
-    ρ_hi - ρ_1,  if |θ_hi| ≥ θ_0 (side region)
-}
-```
-Where:
-- ρ_hi = distance to human i
-- θ_hi = angular deviation between robot trajectory and human position
-- ρ_0 = larger safety threshold for front region
-- ρ_1 = smaller safety threshold for side region
-- θ_0 = critical angular range
-
-### Equation (8) - Yielding Constraint
-```
-h_y,i(dρ_hi/dt, ρ_hi, θ_hi) = {
-    dρ_hi/dt,  if ρ_hi ≤ ρ_0 and |θ_hi| < θ_0
-    dρ_hi/dt,  if ρ_hi ≤ ρ_1 and |θ_hi| ≥ θ_0
-}
-```
-Where:
-- dρ_hi/dt = rate of change of distance (negative when approaching)
-
-### Equation (9) - Speed Constraint
-```
-h_s,i(|v|, ν_M(ρ_hi)) = ν_M(ρ_hi) - |v|
-```
-Where:
-- |v| = robot speed magnitude
-- ν_M(ρ_hi) = V_M · tanh(ρ_hi) = maximum permissible speed
-- V_M = robot's absolute maximum speed
-
-### Equation (10) - Acceleration Constraint
-```
-h_a,i(d|v|/dt, a_max(ρ_hi)) = a_max(ρ_hi) - d|v|/dt
-```
-Where:
-- d|v|/dt = magnitude of robot acceleration
-- a_max(ρ_hi) = maximum allowable acceleration as function of distance
-
-### Equation (11) - CBF Condition
-```
-C_ji = ḣ_ji + α·h²_ji ≥ 0
-```
-Where:
-- j ∈ {d, y, s, a} (distance, yielding, speed, acceleration)
-- i = human index
-- α > 0 = tuning parameter controlling barrier strength
 
 ## Parameters
 - ρ_0 = 3.0m (front region safety threshold)
@@ -115,3 +37,132 @@ python constraints_plots.py
 - [ ] Analysis of constraint redundancy (h1, h3 vs h2)
 - [ ] Review/replacement of acceleration constraint
 - [ ] Implementation of new constraint functions
+
+
+
+# Constraint Functions and Detailed Derivatives for All Constraints
+
+## 1. Distance Constraint – Equation (7)
+
+### Constraint Function
+```math
+h_{d,i}(\rho_{hi}, \theta_{hi}) = \begin{cases}
+\rho_{hi} - \rho_0, & \text{if } |\theta_{hi}| < \theta_0 \text{ (front region)} \\
+\rho_{hi} - \rho_1, & \text{if } |\theta_{hi}| \geq \theta_0 \text{ (side region)}
+\end{cases}
+```
+
+Where:
+- $\rho_{hi} = |\mathbf{p}_r - \mathbf{p}_{hi}|$ = distance to human i
+- $\theta_{hi}$ = angular deviation between robot trajectory and human position
+- $\rho_0$ = larger safety threshold for front region (3.0m)
+- $\rho_1$ = smaller safety threshold for side region (1.2m)
+- $\theta_0 = \pi/4$ = critical angular range (45°)
+
+### Time Derivative
+```math
+\dot{h}_{d,i} = \frac{d\rho_{hi}}{dt} = \frac{(\mathbf{p}_r - \mathbf{p}_{hi})^\top (\mathbf{v}_r - \mathbf{v}_{hi})}{\rho_{hi}}
+```
+
+### Spatial Derivatives
+```math
+\frac{\partial h_{d,i}}{\partial x_r} = \frac{x_r - x_{hi}}{\rho_{hi}}, \quad
+\frac{\partial h_{d,i}}{\partial y_r} = \frac{y_r - y_{hi}}{\rho_{hi}}, \quad
+\frac{\partial h_{d,i}}{\partial \theta_r} = 0
+```
+
+---
+
+## 2. Yielding Constraint – Equation (8)
+
+### Constraint Function
+```math
+h_{y,i}(\rho_{hi}, \theta_{hi}) = \begin{cases}
+\frac{d\rho_{hi}}{dt}, & \text{if } \rho_{hi} \leq \rho_0 \text{ and } |\theta_{hi}| < \theta_0 \\
+\frac{d\rho_{hi}}{dt}, & \text{if } \rho_{hi} \leq \rho_1 \text{ and } |\theta_{hi}| \geq \theta_0
+\end{cases}
+```
+
+Where:
+- $\frac{d\rho_{hi}}{dt} = \frac{(\mathbf{p}_r - \mathbf{p}_{hi})^\top (\mathbf{v}_r - \mathbf{v}_{hi})}{\rho_{hi}}$ = rate of change of distance
+- Negative when approaching, positive when moving away
+- Active only in yielding zones (close proximity regions)
+
+### Time Derivative
+```math
+\dot{h}_{y,i} = \frac{d^2\rho_{hi}}{dt^2} = \frac{1}{\rho_{hi}} \left[ 
+\|\mathbf{v}_r - \mathbf{v}_{hi}\|^2 + (\mathbf{p}_r - \mathbf{p}_{hi})^\top (\mathbf{a}_r - \mathbf{a}_{hi}) - \frac{[(\mathbf{p}_r - \mathbf{p}_{hi})^\top (\mathbf{v}_r - \mathbf{v}_{hi})]^2}{\rho_{hi}^2} 
+\right]
+```
+
+### Spatial Derivatives
+```math
+\frac{\partial h_{y,i}}{\partial x_r} = \frac{\partial h_{d,i}}{\partial x_r}, \quad
+\frac{\partial h_{y,i}}{\partial y_r} = \frac{\partial h_{d,i}}{\partial y_r}, \quad
+\frac{\partial h_{y,i}}{\partial \theta_r} = 0
+```
+
+---
+
+## 3. Speed Constraint – Equation (9)
+
+### Constraint Function
+```math
+h_{s,i}(|\mathbf{v}_r|, \rho_{hi}) = \nu_M(\rho_{hi}) - |\mathbf{v}_r|
+```
+
+Where:
+- $|\mathbf{v}_r|$ = robot speed magnitude
+- $\nu_M(\rho_{hi}) = V_M \cdot \tanh(\rho_{hi})$ = maximum permissible speed
+- $V_M = 1.0$ m/s = robot's absolute maximum speed
+- Speed limit decreases as robot approaches humans
+
+### Time Derivative
+```math
+\dot{h}_{s,i} = V_M \cdot \text{sech}^2(\rho_{hi}) \cdot \frac{(\mathbf{p}_r - \mathbf{p}_{hi})^\top (\mathbf{v}_r - \mathbf{v}_{hi})}{\rho_{hi}} - \frac{\mathbf{v}_r^\top \mathbf{a}_r}{\|\mathbf{v}_r\|}
+```
+
+### Spatial Derivatives
+```math
+\frac{\partial h_{s,i}}{\partial x_r} = V_M \cdot \text{sech}^2(\rho_{hi}) \cdot \frac{x_r - x_{hi}}{\rho_{hi}}, \quad
+\frac{\partial h_{s,i}}{\partial y_r} = V_M \cdot \text{sech}^2(\rho_{hi}) \cdot \frac{y_r - y_{hi}}{\rho_{hi}}, \quad
+\frac{\partial h_{s,i}}{\partial \theta_r} = 0
+```
+
+---
+
+## 4. Acceleration Constraint – Equation (10)
+
+### Constraint Function
+```math
+h_{a,i}(|\mathbf{a}_r|, \rho_{hi}) = a_{\text{max}}(\rho_{hi}) - |\mathbf{a}_r|
+```
+
+Where:
+- $|\mathbf{a}_r| = \frac{d|\mathbf{v}_r|}{dt}$ = magnitude of robot acceleration
+- $a_{\text{max}}(\rho_{hi}) = A_M \cdot \tanh(\rho_{hi})$ = maximum allowable acceleration
+- $A_M = 1.0$ m/s² = robot's absolute maximum acceleration
+- Acceleration limit decreases as robot approaches humans
+
+### Time Derivative
+```math
+\dot{h}_{a,i} = A_M \cdot \text{sech}^2(\rho_{hi}) \cdot \frac{(\mathbf{p}_r - \mathbf{p}_{hi})^\top (\mathbf{v}_r - \mathbf{v}_{hi})}{\rho_{hi}} - \frac{\mathbf{a}_r^\top \dot{\mathbf{a}}_r}{\|\mathbf{a}_r\|}
+```
+
+### Spatial Derivatives
+```math
+\frac{\partial h_{a,i}}{\partial x_r} = A_M \cdot \text{sech}^2(\rho_{hi}) \cdot \frac{x_r - x_{hi}}{\rho_{hi}}, \quad
+\frac{\partial h_{a,i}}{\partial y_r} = A_M \cdot \text{sech}^2(\rho_{hi}) \cdot \frac{y_r - y_{hi}}{\rho_{hi}}, \quad
+\frac{\partial h_{a,i}}{\partial \theta_r} = 0
+```
+
+---
+
+## Summary Table
+
+| Constraint | Complete Constraint Function | Time Derivative |
+|------------|----------------------------|-----------------|
+| **Distance** | $h_{d,i}(\rho_{hi}, \theta_{hi}) = \begin{cases} \rho_{hi} - \rho_0, & \text{if } \|\theta_{hi}\| < \theta_0 \\ \rho_{hi} - \rho_1, & \text{if } \|\theta_{hi}\| \geq \theta_0 \end{cases}$ | $\dot{h}_{d,i} = \frac{(\mathbf{p}_r - \mathbf{p}_{hi})^\top (\mathbf{v}_r - \mathbf{v}_{hi})}{\rho_{hi}}$ |
+| **Yielding** | $h_{y,i}(\rho_{hi}, \theta_{hi}) = \begin{cases} \frac{d\rho_{hi}}{dt}, & \text{if } \rho_{hi} \leq \rho_0 \text{ and } \|\theta_{hi}\| < \theta_0 \\ \frac{d\rho_{hi}}{dt}, & \text{if } \rho_{hi} \leq \rho_1 \text{ and } \|\theta_{hi}\| \geq \theta_0 \end{cases}$ | $\dot{h}_{y,i} = \frac{1}{\rho_{hi}} \left[ \|\mathbf{v}_r - \mathbf{v}_{hi}\|^2 + (\mathbf{p}_r - \mathbf{p}_{hi})^\top (\mathbf{a}_r - \mathbf{a}_{hi}) - \frac{[(\mathbf{p}_r - \mathbf{p}_{hi})^\top (\mathbf{v}_r - \mathbf{v}_{hi})]^2}{\rho_{hi}^2} \right]$ |
+| **Speed** | $h_{s,i}(\|\mathbf{v}_r\|, \rho_{hi}) = V_M \cdot \tanh(\rho_{hi}) - \|\mathbf{v}_r\|$ | $\dot{h}_{s,i} = V_M \cdot \text{sech}^2(\rho_{hi}) \cdot \frac{(\mathbf{p}_r - \mathbf{p}_{hi})^\top (\mathbf{v}_r - \mathbf{v}_{hi})}{\rho_{hi}} - \frac{\mathbf{v}_r^\top \mathbf{a}_r}{\|\mathbf{v}_r\|}$ |
+| **Acceleration** | $h_{a,i}(\|\mathbf{a}_r\|, \rho_{hi}) = A_M \cdot \tanh(\rho_{hi}) - \|\mathbf{a}_r\|$ | $\dot{h}_{a,i} = A_M \cdot \text{sech}^2(\rho_{hi}) \cdot \frac{(\mathbf{p}_r - \mathbf{p}_{hi})^\top (\mathbf{v}_r - \mathbf{v}_{hi})}{\rho_{hi}} - \frac{\mathbf{a}_r^\top \dot{\mathbf{a}}_r}{\|\mathbf{a}_r\|}$ |
